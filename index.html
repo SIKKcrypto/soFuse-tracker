@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Track liquid and locked soFUSE by Fuse wallet address.">
+  <title>soFUSE Tracker</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="network"><span aria-hidden="true"></span> Fuse Network</span>
+      <h1>soFUSE Tracker</h1>
+      <p>Look up a wallet’s liquid and locked soFUSE positions.</p>
+    </header>
+
+    <form id="lookup">
+      <label for="address">Wallet address</label>
+      <div class="input-row">
+        <input id="address" name="address" placeholder="0x…" autocomplete="off" spellcheck="false" required>
+        <button type="submit">Look up</button>
+      </div>
+    </form>
+    <p id="status" role="status"></p>
+
+    <section id="position" aria-label="Wallet position" hidden>
+      <div class="metrics">
+        <article class="hero">
+          <h2>Liquid position value</h2>
+          <div><strong id="value"></strong> <span>FUSE</span></div>
+          <p><span id="balance"></span> soFUSE held</p>
+        </article>
+        <article>
+          <h2>Liquid position net gain</h2>
+          <div><strong id="gain"></strong> <span id="gain-unit">FUSE</span></div>
+          <p>Includes recognized Yield boosts</p>
+        </article>
+      </div>
+      <dl>
+        <div><dt>FUSE per soFUSE</dt><dd id="rate"></dd></div>
+        <div><dt>Deposited</dt><dd id="deposits"></dd></div>
+        <div><dt>Withdrawn</dt><dd id="withdrawals"></dd></div>
+        <div><dt>Yield boosts received</dt><dd id="boosts"></dd></div>
+        <div class="position-total"><dt>Total position value</dt><dd id="total-value"></dd></div>
+      </dl>
+      <p id="coverage" hidden></p>
+      <section id="tier-locks" aria-labelledby="tier-locks-heading" hidden>
+        <article>
+          <h2 id="tier-locks-heading">Locked soFUSE</h2>
+          <p id="lock-status"></p>
+          <div id="lock-position" hidden>
+            <div><strong id="locked-value"></strong> <span>FUSE equivalent</span></div>
+            <p><span id="locked-shares"></span> soFUSE in Solid’s tier locker</p>
+            <dl id="lock-dates"></dl>
+          </div>
+        </article>
+      </section>
+      <footer><a id="explorer" target="_blank" rel="noopener">View wallet on Fuse Explorer</a><span id="block"></span></footer>
+    </section>
+  </main>
+</body>
+</html>

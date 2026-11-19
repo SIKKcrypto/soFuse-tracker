@@ -1,0 +1,13 @@
+{
+  "name": "sofuse-tracker",
+  "version": "0.1.0",
+  "description": "A self-hosted, read-only tracker for liquid and locked Solid soFUSE.",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check history-cache.mjs && node --check dashboard.js"
+  }
+}
