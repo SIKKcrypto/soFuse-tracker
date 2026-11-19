@@ -4,17 +4,27 @@ A self-hosted, read-only dashboard for Solid's soFUSE vault on Fuse. Enter a pub
 
 ## Run on a Windows PC
 
-1. Install the Windows **LTS** release of Node.js, version 22 or newer. Open a fresh PowerShell window and run `node --version` to check the installation. [Download Node.js](https://nodejs.org/en/download)
-2. On the [repository page](https://github.com/SIKKcrypto/soFuse-tracker), select **Code → Download ZIP**, then extract the ZIP. If you already cloned the repository, use that folder.
-3. In File Explorer, open the folder containing `server.mjs`. Click the address bar, type `powershell`, and press **Enter** to open PowerShell in that folder.
-4. Start the tracker. There are no packages to install.
+Both options require the Windows **LTS** release of Node.js, version 22 or newer. [Download Node.js](https://nodejs.org/en/download)
+
+Get the project from **Code → Download ZIP** and extract it, or use an existing clone. No packages need to be installed. [Tracker repository](https://github.com/SIKKcrypto/soFuse-tracker)
+
+### Express install
+
+1. Open the extracted folder and double-click **Start Tracker.bat**.
+2. Leave the launcher window open and visit [http://127.0.0.1:4173/](http://127.0.0.1:4173/). Paste a public Fuse wallet address and select **Look up**. The PC needs internet access to read Fuse data.
+3. Close the launcher window or press **Ctrl+C** to stop the tracker.
+
+### Manual install
+
+1. In File Explorer, open the folder containing `server.mjs`. Type `powershell` in the address bar and press **Enter**.
+2. Check Node.js and start the tracker.
 
    ```powershell
+   node --version
    node server.mjs
    ```
 
-5. Keep PowerShell open. Open [http://127.0.0.1:4173/](http://127.0.0.1:4173/) in your browser, paste a public Fuse wallet address, and select **Look up**. The PC needs internet access to read Fuse data.
-6. To stop the tracker, press **Ctrl+C** in PowerShell. To start it again, repeat steps 3 and 4.
+3. Keep PowerShell open while you use [http://127.0.0.1:4173/](http://127.0.0.1:4173/). Press **Ctrl+C** in PowerShell to stop the tracker.
 
 If Node reports `EADDRINUSE`, the port is already in use. Try the dashboard link first in case the tracker is already running. To start a separate instance, run `$env:PORT = '4174'` before `node server.mjs` and use port `4174` in the browser.
 
