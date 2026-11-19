@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { serialize, walletHistory } from './history-cache.mjs';
 
 const explorer = 'https://explorer.fuse.io';
@@ -12,9 +13,16 @@ const boostSender = '0x521b8d0934b813737ffe19cbc7de810f02b5d9e1';
 const zero = '0x' + '0'.repeat(40);
 const unit = 10n ** 18n;
 const addressPattern = /^0x[0-9a-f]{40}$/i;
+const wordPattern = /^0x[0-9a-f]{64}$/i;
+const enterTopic = '0xea00f88768a86184a6e515238a549c171769fe7460a011d6fd0bcd48ca078ea4';
+const requestedTopic = '0x2eb08ebdb4d68b4a37e3b424927f3363e1d799ca7e56e7b2c59cc6c1778d33f5';
+const cancelledTopic = '0x114ef421aef557f2e4086396789e7fb532b1133ff2982c9d948daa73d0691e36';
+const solvedTopic = '0xd94fc49a6578873ff851671d19cacb1809887f7a9128867ee4306dc3ffc93c26';
 
 async function json(url, options) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(15000) });
+  const timeout = AbortSignal.timeout(10000);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const response = await fetch(url, { ...options, signal });
   if (!response.ok) throw new Error('Upstream HTTP ' + response.status);
   return response.json();
 }
@@ -29,21 +37,29 @@ async function rpc(method, params) {
   return data.result;
 }
 
-async function transfers(address, token, block) {
+async function transfers(address, token, block, signal) {
   const rows = [];
+  const seen = new Set();
   let cursor;
   for (let page = 0; page < 40; page++) {
     const query = new URLSearchParams(cursor);
     query.set('token', token);
-    const data = await json(explorer + '/api/v2/addresses/' + address + '/token-transfers?' + query);
+    const data = await json(explorer + '/api/v2/addresses/' + address + '/token-transfers?' + query, { signal });
     if (!Array.isArray(data.items)) throw new Error('Explorer transfer history unavailable');
     for (const item of data.items) {
-      if (item.block_number > block || item.token.address_hash.toLowerCase() !== token) continue;
+      if (!Number.isSafeInteger(item.block_number) || item.block_number > block ||
+          item.token.address_hash.toLowerCase() !== token) continue;
+      if (!wordPattern.test(item.transaction_hash) || !Number.isSafeInteger(item.log_index) ||
+          !addressPattern.test(item.from.hash) || !addressPattern.test(item.to.hash) ||
+          !/^\d+$/.test(item.total.value)) throw new Error('Invalid explorer transfer');
+      const key = item.transaction_hash + ':' + item.log_index;
+      if (seen.has(key)) continue;
+      seen.add(key);
       rows.push({
         hash: item.transaction_hash,
-        from: item.from.hash,
-        to: item.to.hash,
-        value: item.total.value,
+        from: item.from.hash.toLowerCase(),
+        to: item.to.hash.toLowerCase(),
+        value: BigInt(item.total.value),
       });
     }
     cursor = data.next_page_params;
@@ -68,18 +84,49 @@ function receiptEvents(hash) {
 }
 
 async function loadReceiptEvents(hash) {
-  const items = [];
+  const events = [];
+  const signal = AbortSignal.timeout(10000);
   let next;
-  do {
-    const data = await json(explorer + '/api/v2/transactions/' + hash + '/logs?' + new URLSearchParams(next));
-    items.push(...data.items);
+  for (let page = 0; page < 10; page++) {
+    const data = await json(explorer + '/api/v2/transactions/' + hash + '/logs?' + new URLSearchParams(next), { signal });
+    if (!Array.isArray(data.items)) throw new Error('Explorer receipt unavailable');
+    for (const item of data.items) {
+      const event = parseReceiptEvent(item);
+      if (event) events.push(event);
+    }
     next = data.next_page_params;
-  } while (next);
-  return items.filter(item => item.decoded).map(item => ({
-    contract: item.address.hash.toLowerCase(),
-    name: item.decoded.abi.name,
-    fields: Object.fromEntries(item.decoded.parameters.map(({ name, value }) => [name, String(value).toLowerCase()])),
-  }));
+    if (!next) return events;
+  }
+  throw new Error('Explorer receipt exceeded lookup limit');
+}
+
+function parseReceiptEvent(item) {
+  const contract = item.address.hash.toLowerCase();
+  const [signature, first, second, third] = item.topics;
+  const topicAddress = topic => {
+    if (!wordPattern.test(topic)) throw new Error('Invalid receipt topic');
+    return '0x' + topic.slice(-40).toLowerCase();
+  };
+  const word = index => {
+    const field = '0x' + item.data.slice(2 + index * 64, 66 + index * 64);
+    return readUint(field);
+  };
+  if (contract === shares && signature === enterTopic) {
+    // Enter(address indexed from, address indexed asset, uint256 amount, address indexed to, uint256 shares).
+    return { kind: 'deposit', asset: topicAddress(second), user: topicAddress(third), assets: word(0), shares: word(1) };
+  }
+  if (contract !== queue || !wordPattern.test(first)) return;
+  if (signature === requestedTopic) {
+    return { kind: 'request', id: first, user: topicAddress(second), asset: topicAddress(third), shares: word(1), assets: word(2) };
+  }
+  if (signature === cancelledTopic || signature === solvedTopic) {
+    return { kind: signature === cancelledTopic ? 'cancel' : 'solve', id: first, user: topicAddress(second) };
+  }
+}
+
+function readUint(value) {
+  if (!wordPattern.test(value)) throw new Error('Invalid contract return value');
+  return BigInt(value);
 }
 
 async function portfolio(address) {
@@ -93,8 +140,9 @@ async function portfolio(address) {
       return null;
     }),
   ]);
-  const balance = BigInt(balanceHex);
-  const rate = BigInt(rateHex);
+  const balance = readUint(balanceHex);
+  const rate = readUint(rateHex);
+  if (rate === 0n) throw new Error('Fuse accountant returned a zero rate');
   const value = balance * rate / unit;
   const lockedShares = locks?.reduce((total, lock) => total + lock.shares, 0n);
   const lockedValue = lockedShares == null ? null : lockedShares * rate / unit;
@@ -109,6 +157,7 @@ async function portfolio(address) {
 async function readLocks(addressWord, block) {
   // SolidTierLock.getLocks(address) returns (shares, lockedAt, unlocksAt)[].
   const result = await rpc('eth_call', [{ to: tierLocker, data: '0x719f3089' + addressWord }, block]);
+  if (!/^0x[0-9a-f]+$/i.test(result)) throw new Error('Invalid tier lock response');
   const words = result.slice(2).match(/.{64}/g) ?? [];
   if (words.length < 2 || result.length !== 2 + words.length * 64 ||
       BigInt('0x' + words[0]) !== 32n || BigInt('0x' + words[1]) * 3n !== BigInt(words.length - 2)) {
@@ -116,52 +165,71 @@ async function readLocks(addressWord, block) {
   }
   const locks = [];
   for (let index = 2; index < words.length; index += 3) {
+    const unlocksAt = Number(BigInt('0x' + words[index + 2]));
+    if (unlocksAt > 8640000000000) throw new Error('Invalid lock expiry');
     locks.push({
       shares: BigInt('0x' + words[index]),
-      unlocksAt: Number(BigInt('0x' + words[index + 2])),
+      unlocksAt,
     });
   }
   return locks.sort((a, b) => a.unlocksAt - b.unlocksAt);
 }
 
 async function cashFlows(address, block) {
-  const rows = await transfers(address, shares, block);
-  const receipts = new Map();
-  const events = hash => {
-    if (!receipts.has(hash)) receipts.set(hash, receiptEvents(hash));
-    return receipts.get(hash);
+  const signal = AbortSignal.timeout(25000);
+  const rows = await transfers(address, shares, block, signal);
+  const events = async hash => {
+    signal.throwIfAborted();
+    let onAbort;
+    const deadline = new Promise((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      // Another lookup can still use the shared receipt if this scan times out.
+      return await Promise.race([receiptEvents(hash), deadline]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
   };
   let deposits = 0n;
   let withdrawals = 0n;
   let boosts = 0n;
   let shareDelta = 0n;
   let unclassified = 0;
-  let pending = 0;
   const requests = new Map();
   const consumed = new Set();
 
   for (const row of rows) {
-    const amount = BigInt(row.value);
-    const incoming = row.to.toLowerCase() === address;
-    const outgoing = row.from.toLowerCase() === address;
+    const amount = row.value;
+    const incoming = row.to === address;
+    const outgoing = row.from === address;
     if (amount === 0n || incoming === outgoing) continue;
     shareDelta += incoming ? amount : -amount;
-    if (incoming && row.from.toLowerCase() === boostSender) {
+    if (incoming && row.from === boostSender) {
       boosts += amount;
-    } else if (incoming && row.from.toLowerCase() === zero) {
+    } else if (incoming && row.from === zero) {
       const log = (await events(row.hash)).find(event =>
-        !consumed.has(event) && event.contract === shares && event.name === 'Enter' &&
-        event.fields.asset === wrapped && event.fields.to === address && BigInt(event.fields.shares) === amount);
+        !consumed.has(event) && event.kind === 'deposit' && event.asset === wrapped &&
+        event.user === address && event.shares === amount && event.assets > 0n);
       if (log) {
-        deposits += BigInt(log.fields.amount);
+        deposits += log.assets;
         consumed.add(log);
       } else unclassified++;
-    } else if (outgoing && row.to.toLowerCase() === queue) {
+    } else if (outgoing && row.to === queue) {
       const log = (await events(row.hash)).find(event =>
-        !consumed.has(event) && event.contract === queue && event.fields.user === address &&
-        event.fields.assetOut === wrapped && event.fields.amountOfShares === row.value && event.fields.requestId);
+        !consumed.has(event) && event.kind === 'request' && event.user === address &&
+        event.asset === wrapped && event.shares === amount);
       if (log) {
-        requests.set(log.fields.requestId, BigInt(log.fields.amountOfAssets));
+        requests.set(log.id, log);
+        consumed.add(log);
+      } else unclassified++;
+    } else if (incoming && row.from === queue) {
+      const log = (await events(row.hash)).find(event =>
+        !consumed.has(event) && event.kind === 'cancel' && event.user === address &&
+        requests.get(event.id)?.shares === amount);
+      if (log) {
+        requests.delete(log.id);
         consumed.add(log);
       } else unclassified++;
     } else {
@@ -170,20 +238,20 @@ async function cashFlows(address, block) {
   }
 
   if (requests.size) {
-    const payments = await transfers(address, wrapped, block);
+    const payments = await transfers(address, wrapped, block, signal);
+    const amounts = new Set([...requests.values()].map(request => request.assets));
     for (const row of payments) {
-      if (row.to.toLowerCase() !== address || ![...requests.values()].includes(BigInt(row.value))) continue;
+      if (row.to !== address || row.from === address || !amounts.has(row.value)) continue;
       const log = (await events(row.hash)).find(event =>
-        event.contract === queue && event.name === 'OnChainWithdrawSolved' && event.fields.user === address &&
-        requests.get(event.fields.requestId) === BigInt(row.value));
+        event.kind === 'solve' && event.user === address && requests.get(event.id)?.assets === row.value);
       if (log) {
-        withdrawals += BigInt(row.value);
-        requests.delete(log.fields.requestId);
+        withdrawals += row.value;
+        requests.delete(log.id);
       }
+      if (requests.size === 0) break;
     }
-    pending = requests.size;
   }
-  return { deposits, withdrawals, boosts, shareDelta, unclassified, pending };
+  return { deposits, withdrawals, boosts, shareDelta, unclassified, pending: requests.size };
 }
 
 const staticFiles = {
@@ -193,7 +261,12 @@ const staticFiles = {
 };
 
 function send(response, status, type, body) {
-  response.writeHead(status, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff' });
+  response.writeHead(status, {
+    'Content-Type': type,
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  });
   response.end(body);
 }
 
@@ -202,24 +275,43 @@ function sendJson(response, status, body) {
   send(response, status, 'application/json', serialize(body));
 }
 
-createServer(async (request, response) => {
-  const url = new URL(request.url, 'http://localhost');
-  const file = Object.hasOwn(staticFiles, url.pathname) && staticFiles[url.pathname];
-  try {
-    if (request.method !== 'GET') return sendJson(response, 405, { error: 'Method not allowed.' });
-    if (url.pathname === '/api/position') {
-      const address = url.searchParams.get('address')?.trim() ?? '';
-      if (!addressPattern.test(address) || address.toLowerCase() === zero) {
-        return sendJson(response, 400, { error: 'Enter a valid Fuse wallet address.' });
+export function createTrackerServer() {
+  const activeLookups = new Map();
+  return createServer({ headersTimeout: 10000, requestTimeout: 15000 }, async (request, response) => {
+    try {
+      const url = new URL(request.url, 'http://localhost');
+      const file = Object.hasOwn(staticFiles, url.pathname) && staticFiles[url.pathname];
+      if (request.method !== 'GET' && !(request.method === 'HEAD' && file)) {
+        response.setHeader('Allow', file ? 'GET, HEAD' : 'GET');
+        return sendJson(response, 405, { error: 'Method not allowed.' });
       }
-      return sendJson(response, 200, await portfolio(address.toLowerCase()));
+      if (url.pathname === '/api/position') {
+        const address = (url.searchParams.get('address')?.trim() ?? '').toLowerCase();
+        if (!addressPattern.test(address) || address === zero) {
+          return sendJson(response, 400, { error: 'Enter a valid Fuse wallet address.' });
+        }
+        let lookup = activeLookups.get(address);
+        if (!lookup) {
+          if (activeLookups.size >= 8) {
+            response.setHeader('Retry-After', '5');
+            return sendJson(response, 503, { error: 'The tracker is busy. Try again in a few seconds.' });
+          }
+          lookup = portfolio(address).finally(() => activeLookups.delete(address));
+          activeLookups.set(address, lookup);
+        }
+        return sendJson(response, 200, await lookup);
+      }
+      if (file) return send(response, 200, file[1], await readFile(new URL(file[0], import.meta.url)));
+      sendJson(response, 404, { error: 'Page not found.' });
+    } catch (error) {
+      console.error(error.message);
+      sendJson(response, 502, { error: 'Fuse data is temporarily unavailable. Try again shortly.' });
     }
-    if (file) return send(response, 200, file[1], await readFile(new URL(file[0], import.meta.url)));
-    sendJson(response, 404, { error: 'Page not found.' });
-  } catch (error) {
-    console.error(error.message);
-    sendJson(response, 502, { error: 'Fuse data is temporarily unavailable. Try again shortly.' });
-  }
-}).listen(Number(process.env.PORT ?? 4173), process.env.HOST ?? '127.0.0.1', function () {
-  console.log('Listening on ' + this.address().address + ':' + this.address().port);
-});
+  });
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  createTrackerServer().listen(Number(process.env.PORT ?? 4173), process.env.HOST ?? '127.0.0.1', function () {
+    console.log('Listening on ' + this.address().address + ':' + this.address().port);
+  });
+}

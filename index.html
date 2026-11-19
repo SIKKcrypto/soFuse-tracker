@@ -4,60 +4,79 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Track liquid and locked soFUSE by Fuse wallet address.">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#0b1512">
   <title>soFUSE Tracker</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/dashboard.js" defer></script>
 </head>
 <body>
-  <main>
-    <header>
-      <span class="network"><span aria-hidden="true"></span> Fuse Network</span>
+  <main class="shell">
+    <header class="page-heading">
+      <p class="network"><span aria-hidden="true"></span> Fuse Network</p>
       <h1>soFUSE Tracker</h1>
-      <p>Look up a wallet’s liquid and locked soFUSE positions.</p>
+      <p>Track your liquid balance, tier locks, and net gain by wallet address.</p>
     </header>
 
-    <form id="lookup">
-      <label for="address">Wallet address</label>
+    <form id="lookup" class="lookup">
+      <label for="address">Fuse wallet address</label>
       <div class="input-row">
-        <input id="address" name="address" placeholder="0x…" autocomplete="off" spellcheck="false" required>
-        <button type="submit">Look up</button>
+        <input id="address" name="address" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-errormessage="status" required>
+        <button id="submit" type="submit">Look up</button>
       </div>
+      <p id="status" class="lookup-status" role="status"></p>
     </form>
-    <p id="status" role="status"></p>
+    <noscript><p class="notice">Enable JavaScript to look up a wallet.</p></noscript>
 
-    <section id="position" aria-label="Wallet position" hidden>
-      <div class="metrics">
-        <article class="hero">
-          <h2>Liquid position value</h2>
-          <div><strong id="value"></strong> <span>FUSE</span></div>
-          <p><span id="balance"></span> soFUSE held</p>
+    <section id="position" aria-labelledby="position-heading" hidden>
+      <header class="result-heading">
+        <div>
+          <h2 id="position-heading">Wallet position</h2>
+          <code id="shown-address" class="wallet-address"></code>
+        </div>
+        <a id="explorer" target="_blank" rel="noopener noreferrer" href="https://explorer.fuse.io/">View on Fuse Explorer</a>
+      </header>
+
+      <div class="summary">
+        <article class="card metric metric-primary">
+          <h3>Liquid position value</h3>
+          <p class="metric-value"><strong id="value"></strong> <span>FUSE</span></p>
+          <p class="metric-detail"><span id="balance"></span> soFUSE in wallet</p>
         </article>
-        <article>
-          <h2>Liquid position net gain</h2>
-          <div><strong id="gain"></strong> <span id="gain-unit">FUSE</span></div>
-          <p>Includes recognized Yield boosts</p>
+        <article class="card metric">
+          <h3>Liquid net gain</h3>
+          <p class="metric-value"><strong id="gain"></strong> <span id="gain-unit">FUSE</span></p>
+          <p id="gain-detail" class="metric-detail"></p>
         </article>
       </div>
-      <dl>
-        <div><dt>FUSE per soFUSE</dt><dd id="rate"></dd></div>
-        <div><dt>Deposited</dt><dd id="deposits"></dd></div>
-        <div><dt>Withdrawn</dt><dd id="withdrawals"></dd></div>
-        <div><dt>Yield boosts received</dt><dd id="boosts"></dd></div>
-        <div class="position-total"><dt>Total position value</dt><dd id="total-value"></dd></div>
-      </dl>
-      <p id="coverage" hidden></p>
-      <section id="tier-locks" aria-labelledby="tier-locks-heading" hidden>
-        <article>
-          <h2 id="tier-locks-heading">Locked soFUSE</h2>
-          <p id="lock-status"></p>
-          <div id="lock-position" hidden>
-            <div><strong id="locked-value"></strong> <span>FUSE equivalent</span></div>
-            <p><span id="locked-shares"></span> soFUSE in Solid’s tier locker</p>
-            <dl id="lock-dates"></dl>
+
+      <div class="details">
+        <section class="card detail-card" aria-labelledby="activity-heading">
+          <h3 id="activity-heading">Position breakdown</h3>
+          <dl class="data-list">
+            <div><dt>FUSE per soFUSE</dt><dd id="rate"></dd></div>
+            <div><dt>Deposited</dt><dd id="deposits"></dd></div>
+            <div><dt>Withdrawn</dt><dd id="withdrawals"></dd></div>
+            <div><dt>Yield boosts received</dt><dd id="boosts"></dd></div>
+            <div class="position-total"><dt>Total position value <span>Liquid and locked</span></dt><dd id="total-value"></dd></div>
+          </dl>
+          <p id="coverage" class="notice" hidden></p>
+        </section>
+
+        <section class="card detail-card" aria-labelledby="tier-locks-heading">
+          <h3 id="tier-locks-heading">Solid tier locks</h3>
+          <p id="lock-status" class="lock-status"></p>
+          <div id="lock-position">
+            <p class="metric-value"><strong id="locked-value"></strong> <span>FUSE equivalent</span></p>
+            <p class="metric-detail"><span id="locked-shares"></span> soFUSE locked</p>
+            <dl id="lock-dates" class="data-list lock-list"></dl>
           </div>
-        </article>
-      </section>
-      <footer><a id="explorer" target="_blank" rel="noopener">View wallet on Fuse Explorer</a><span id="block"></span></footer>
+        </section>
+      </div>
+      <footer class="position-meta">
+        <span id="block"></span>
+        <span id="history-block" hidden></span>
+      </footer>
     </section>
   </main>
 </body>
