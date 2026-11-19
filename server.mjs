@@ -257,7 +257,12 @@ async function cashFlows(address, block) {
 const staticFiles = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/dashboard.js': ['dashboard.js', 'text/javascript; charset=utf-8'],
+  '/pwa.js': ['pwa.js', 'text/javascript; charset=utf-8'],
+  '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
+  '/icon-192.png': ['icon-192.png', 'image/png'],
+  '/icon-512.png': ['icon-512.png', 'image/png'],
 };
 
 function send(response, status, type, body) {
@@ -265,7 +270,7 @@ function send(response, status, type, body) {
     'Content-Type': type,
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   });
   response.end(body);
 }
@@ -301,7 +306,10 @@ export function createTrackerServer() {
         }
         return sendJson(response, 200, await lookup);
       }
-      if (file) return send(response, 200, file[1], await readFile(new URL(file[0], import.meta.url)));
+      if (file) {
+        if (url.pathname === '/sw.js') response.setHeader('Cache-Control', 'no-cache');
+        return send(response, 200, file[1], await readFile(new URL(file[0], import.meta.url)));
+      }
       sendJson(response, 404, { error: 'Page not found.' });
     } catch (error) {
       console.error(error.message);

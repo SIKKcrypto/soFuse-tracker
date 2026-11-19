@@ -122,3 +122,28 @@ test('reconciles raw deposit and withdrawal events, cancelled requests, and lock
   assert.equal((await dispatch(server, '/api/position', 'POST')).status, 405);
   assert.equal((await dispatch(server, '/history-cache.mjs')).status, 404);
 });
+
+test('serves the installable app shell under the same-origin content policy', async () => {
+  const { createTrackerServer } = await import('./server.mjs');
+  const server = createTrackerServer();
+  const page = await dispatch(server, '/');
+  assert.equal(page.status, 200);
+  assert.match(page.body.toString(), /rel="manifest" href="\/manifest\.webmanifest"/);
+  assert.match(page.headers['Content-Security-Policy'], /manifest-src 'self'; worker-src 'self'/);
+
+  const manifest = await dispatch(server, '/manifest.webmanifest');
+  assert.equal(manifest.status, 200);
+  assert.match(manifest.headers['Content-Type'], /^application\/manifest\+json/);
+  const app = JSON.parse(manifest.body);
+  assert.equal(app.start_url, '/');
+  assert.equal(app.display, 'standalone');
+  for (const { src, sizes } of app.icons) {
+    const icon = await dispatch(server, src);
+    assert.equal(icon.status, 200);
+    assert.equal(icon.headers['Content-Type'], 'image/png');
+    assert.equal(icon.body.readUInt32BE(16) + 'x' + icon.body.readUInt32BE(20), sizes);
+  }
+  const worker = await dispatch(server, '/sw.js');
+  assert.equal(worker.status, 200);
+  assert.equal(worker.headers['Cache-Control'], 'no-cache');
+});

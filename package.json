@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check history-cache.mjs && node --check dashboard.js",
+    "check": "node --check server.mjs && node --check history-cache.mjs && node --check dashboard.js && node --check pwa.js && node --check sw.js",
     "test": "node --test"
   }
 }

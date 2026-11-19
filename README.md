@@ -41,6 +41,32 @@ If Node reports `EADDRINUSE`, the port is already in use. Try the dashboard link
 3. In a second PowerShell window, run `ipconfig` and find the **IPv4 Address** under your active Wi-Fi adapter. For example, if the address is `192.168.1.42`, open `http://192.168.1.42:4173/` in your phone’s browser.
 4. If Windows Firewall prompts you, allow access on **Private networks** only. If the phone still can’t reach the dashboard, check that the PC is awake and both devices are on the same network.
 
+### Add the tracker to your Android home screen
+
+Open the tracker in Chrome on Android. In the **⋮** menu, look for **Install and create shortcut**, then choose **Install** if available. On a plain HTTP Wi-Fi address, Chrome may offer **Create shortcut** instead. The PC still serves the dashboard in either case. [Chrome's Android install instructions](https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DAndroid)
+
+An HTTPS self-hosted address supports the installable web app when Chrome offers it. Live wallet data requires a running tracker server and internet access.
+
+## Run entirely on Android
+
+This option runs the same tracker server in Termux on your phone. You can use it without a PC.
+
+1. Install Termux from a source listed in its [official installation guide](https://github.com/termux/termux-app#installation).
+2. Download the tracker ZIP from GitHub on your phone. While the repo is private, sign in to GitHub with an account that can access it. The commands below assume the ZIP is named `soFuse-tracker-main.zip` in Downloads.
+3. In Termux, run the following commands. When Android prompts for storage access, allow it so Termux can read the ZIP from Downloads.
+
+   ```sh
+   pkg install nodejs-lts unzip
+   termux-setup-storage
+   mkdir -p "$HOME/sofuse"
+   unzip "$HOME/storage/downloads/soFuse-tracker-main.zip" -d "$HOME/sofuse"
+   cd "$HOME/sofuse/soFuse-tracker-main"
+   sh start-android.sh
+   ```
+
+4. On that phone, open [http://127.0.0.1:4173/](http://127.0.0.1:4173/) in Chrome. Use the home-screen steps above if Chrome offers them. The launcher keeps the server on the phone’s loopback address, and the wallet cache stays in Termux’s private storage.
+5. Leave Termux running while you use the tracker. If Android stops it, reopen Termux and run `sh "$HOME/sofuse/soFuse-tracker-main/start-android.sh"` again. The home-screen icon opens the dashboard and relies on the Termux server.
+
 ## Self-host
 
 Run the same Node process on your own machine. For internet access, put it behind an HTTPS reverse proxy with per-client request limits and keep the Node process on loopback when the proxy runs on the same host. Serve the app at the root of its own origin. The proxy's access logs may record wallet addresses in lookup URLs.
