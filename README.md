@@ -2,15 +2,34 @@
 
 A self-hosted, read-only dashboard for Solid's soFUSE vault on Fuse. Enter a public Fuse wallet address to see liquid shares, tier locks, unlock dates, and verified liquid earnings. No wallet connection or API key is required.
 
-## Run locally
+## Run on a Windows PC
 
-Requires Node.js 22 or newer and outbound HTTPS access to the Fuse RPC and explorer. There are no packages to install.
+1. Install the Windows **LTS** release of Node.js, version 22 or newer. Open a fresh PowerShell window and run `node --version` to check the installation. [Download Node.js](https://nodejs.org/en/download)
+2. On the [repository page](https://github.com/SIKKcrypto/soFuse-tracker), select **Code → Download ZIP**, then extract the ZIP. If you already cloned the repository, use that folder.
+3. In File Explorer, open the folder containing `server.mjs`. Click the address bar, type `powershell`, and press **Enter** to open PowerShell in that folder.
+4. Start the tracker. There are no packages to install.
 
-```sh
-node server.mjs
-```
+   ```powershell
+   node server.mjs
+   ```
 
-Open [the local dashboard](http://127.0.0.1:4173/) and enter a Fuse address. An `address` query parameter opens the dashboard with that wallet selected.
+5. Keep PowerShell open. Open [http://127.0.0.1:4173/](http://127.0.0.1:4173/) in your browser, paste a public Fuse wallet address, and select **Look up**. The PC needs internet access to read Fuse data.
+6. To stop the tracker, press **Ctrl+C** in PowerShell. To start it again, repeat steps 3 and 4.
+
+If Node reports `EADDRINUSE`, the port is already in use. Try the dashboard link first in case the tracker is already running. To start a separate instance, run `$env:PORT = '4174'` before `node server.mjs` and use port `4174` in the browser.
+
+## Open it on a phone over Wi-Fi
+
+1. Connect your phone and PC to the same trusted Wi-Fi network. If the tracker is already running, stop it with **Ctrl+C**.
+2. In PowerShell, from the tracker folder, run:
+
+   ```powershell
+   $env:HOST = '0.0.0.0'
+   node server.mjs
+   ```
+
+3. In a second PowerShell window, run `ipconfig` and find the **IPv4 Address** under your active Wi-Fi adapter. For example, if the address is `192.168.1.42`, open `http://192.168.1.42:4173/` in your phone’s browser.
+4. If Windows Firewall prompts you, allow access on **Private networks** only. If the phone still can’t reach the dashboard, check that the PC is awake and both devices are on the same network.
 
 ## Self-host
 
