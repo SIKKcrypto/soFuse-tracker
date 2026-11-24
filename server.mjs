@@ -319,7 +319,24 @@ export function createTrackerServer() {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  createTrackerServer().listen(Number(process.env.PORT ?? 4173), process.env.HOST ?? '127.0.0.1', function () {
-    console.log('Listening on ' + this.address().address + ':' + this.address().port);
-  });
+  const portSetting = process.env.PORT ?? '4173';
+  const port = Number(portSetting);
+  if (!/^\d+$/.test(portSetting) || port > 65535) {
+    console.error('PORT must be a whole number from 0 to 65535.');
+    process.exitCode = 1;
+  } else {
+    const server = createTrackerServer();
+    server.once('error', error => {
+      console.error(error.code === 'EADDRINUSE'
+        ? 'Port ' + port + ' is already in use (EADDRINUSE). Stop the other server or choose a different PORT.'
+        : 'Could not start the tracker. ' + error.message);
+      process.exitCode = 1;
+    });
+    server.listen(port, process.env.HOST || '127.0.0.1', () => {
+      const address = server.address();
+      const local = address.address === '0.0.0.0' ? '127.0.0.1' : address.address;
+      const host = local.includes(':') ? '[' + local + ']' : local;
+      console.log('Open http://' + host + ':' + address.port + '/');
+    });
+  }
 }

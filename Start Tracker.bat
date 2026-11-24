@@ -5,9 +5,6 @@ pushd "%~dp0" || goto folder_error
 node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" >nul 2>&1
 if errorlevel 1 goto node_error
 
-if not defined HOST set "HOST=127.0.0.1"
-if not defined PORT set "PORT=4173"
-echo Open http://127.0.0.1:%PORT%/ in your browser once the tracker is listening.
 echo Press Ctrl+C to stop the tracker.
 echo.
 node server.mjs
