@@ -23,20 +23,20 @@ const requestedTopic = '0x2eb08ebdb4d68b4a37e3b424927f3363e1d799ca7e56e7b2c59cc6
 const cancelledTopic = '0x114ef421aef557f2e4086396789e7fb532b1133ff2982c9d948daa73d0691e36';
 const solvedTopic = '0xd94fc49a6578873ff851671d19cacb1809887f7a9128867ee4306dc3ffc93c26';
 
-async function json(url, options) {
-  const timeout = AbortSignal.timeout(10000);
+async function json(url, options, timeoutMs = 10000) {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const response = await fetch(url, { ...options, signal });
   if (!response.ok) throw new Error('Upstream HTTP ' + response.status);
   return response.json();
 }
 
-async function rpc(method, params, endpoint = 'https://rpc.fuse.io') {
+async function rpc(method, params, endpoint = 'https://rpc.fuse.io', timeoutMs) {
   const data = await json(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
+  }, timeoutMs);
   if (!data.result || data.error) throw new Error('RPC: ' + (data.error?.message ?? 'no result'));
   return data.result;
 }
@@ -159,7 +159,7 @@ async function portfolio(address, persist) {
 }
 
 function baseRpc(method, params, endpoint = process.env.BASE_RPC_URL || 'https://mainnet.base.org') {
-  return rpc(method, params, endpoint);
+  return rpc(method, params, endpoint, method === 'eth_getLogs' ? 18000 : undefined);
 }
 
 async function euroPosition(address, blockHex) {
@@ -377,8 +377,9 @@ export function createTrackerHandler({ hosted = false } = {}) {
           if (!endpoint) return sendJson(response, 503, { error: 'Base yield history is not configured on this server.' });
           const result = await euroHistory(address, euroPosition, endpoint);
           if ('through' in result) {
-            response.setHeader('Retry-After', '2');
-            return sendJson(response, 202, result);
+            const { through, target, retryAfter = 2 } = result;
+            response.setHeader('Retry-After', String(retryAfter));
+            return sendJson(response, 202, { through, target });
           }
           return sendJson(response, 200, result);
         }

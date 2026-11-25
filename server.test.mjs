@@ -311,8 +311,8 @@ test('resumes a shared Base scan and reports earned yield after all shares leave
   assert.equal(progress[0].status, 202);
   assert.equal(progress[0].headers['Retry-After'], '2');
   assert.equal(progress[1].body, progress[0].body);
-  assert.deepEqual(JSON.parse(progress[0].body), { through: firstBlock + 449999, target: finalized });
-  assert.equal(scanned.length, 9);
+  assert.deepEqual(JSON.parse(progress[0].body), { through: firstBlock + 299999, target: finalized });
+  assert.equal(scanned.length, 6);
 
   const result = await dispatch(hostedEarnings, path);
   assert.equal(result.status, 200);
@@ -322,4 +322,24 @@ test('resumes a shared Base scan and reports earned yield after all shares leave
   assert.deepEqual(scanned.at(-1), [finalized, finalized]);
   await dispatch(hostedEarnings, path);
   assert.equal(scanned.length, 11, 'verified history is shared across lookups');
+});
+
+test('preserves contiguous Base history when a concurrent archive query times out', async () => {
+  const { createEuroHistory } = await import('./base-yield-history.mjs');
+  const firstBlock = 52636355;
+  const target = firstBlock + 149999;
+  const calls = [];
+  const history = createEuroHistory({ persist: false, rpc: async (method, params) => {
+    if (method === 'eth_getBlockByNumber') return { number: '0x' + target.toString(16) };
+    const from = Number(params[0].fromBlock);
+    calls.push(from);
+    if (from === firstBlock + 50000) throw new DOMException('Archive request timed out', 'TimeoutError');
+    return [];
+  } });
+  const readPosition = () => assert.fail('cannot reconcile an incomplete history');
+  const progress = await history(owner, readPosition, 'https://base-archive.example');
+  assert.deepEqual(progress, { through: firstBlock + 49999, target, retryAfter: 6 });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(await history(owner, readPosition, 'https://base-archive.example'), progress);
+  assert.equal(calls.length, 3, 'the retry delay applies across lookups');
 });

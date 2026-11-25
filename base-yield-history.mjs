@@ -11,7 +11,6 @@ const rateTopic = '0xa95bc6aba40bbc4d95fc35f118c4cd8b53fc5d5b89ed264002af03503a7
 const firstBlock = 52636355;
 const rangeSize = 50000;
 const parallelRanges = 3;
-const batchesPerLookup = 3;
 const maxCacheEvents = 50000;
 const word = /^0x[0-9a-f]{64}$/i;
 const addressTopic = /^0x0{24}[0-9a-f]{40}$/i;
@@ -76,6 +75,7 @@ export function createEuroHistory({ rpc, persist }) {
   let through = firstBlock - 1;
   let restored;
   let scan;
+  let retryAt = 0;
   let finalizedBlock;
   let finalizedUntil = 0;
   let finalizedRequest;
@@ -137,6 +137,7 @@ export function createEuroHistory({ rpc, persist }) {
   async function advance(target, endpoint) {
     const before = through;
     try {
+      const batchesPerLookup = persist ? 3 : 2;
       for (let batch = 0; batch < batchesPerLookup && through < target; batch++) {
         const ranges = [];
         let next = through + 1;
@@ -145,10 +146,20 @@ export function createEuroHistory({ rpc, persist }) {
           ranges.push([next, end]);
           next = end + 1;
         }
-        const batchEvents = (await Promise.all(ranges.map(([from, to]) => scanRange(from, to, endpoint)))).flat();
-        if (events.length + batchEvents.length > maxCacheEvents) throw new Error('Base yield history exceeds cache limit');
-        events.push(...batchEvents);
-        through = next - 1;
+        const results = await Promise.allSettled(ranges.map(([from, to]) => scanRange(from, to, endpoint)));
+        for (const [index, result] of results.entries()) {
+          if (result.status === 'rejected') {
+            const error = result.reason;
+            if (error.name !== 'TimeoutError' && !(error instanceof TypeError) &&
+                !/limit reached|Upstream HTTP (?:429|5\d\d)/i.test(error.message)) throw error;
+            retryAt = Date.now() + 6000;
+            console.warn('Base yield RPC paused at block ' + ranges[index][0] + ': ' + error.message);
+            return;
+          }
+          if (events.length + result.value.length > maxCacheEvents) throw new Error('Base yield history exceeds cache limit');
+          events.push(...result.value);
+          through = ranges[index][1];
+        }
       }
     } finally {
       if (persist && through > before) await save();
@@ -158,11 +169,11 @@ export function createEuroHistory({ rpc, persist }) {
   return async (address, readPosition, endpoint) => {
     if (persist) await (restored ??= restore());
     const target = await finalized();
-    if (through < target) {
+    if (through < target && Date.now() >= retryAt) {
       scan ??= advance(target, endpoint).finally(() => { scan = undefined; });
       await scan;
     }
-    if (through < target) return { through, target };
+    if (through < target) return { through, target, retryAfter: Math.max(2, Math.ceil((retryAt - Date.now()) / 1000)) };
 
     const key = fingerprint(address);
     const transfers = [];
