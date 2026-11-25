@@ -1,7 +1,7 @@
 {
-  "name": "sofuse-tracker",
+  "name": "solid-tracker",
   "version": "0.1.0",
-  "description": "A self-hosted, read-only tracker for liquid and locked Solid soFUSE.",
+  "description": "A self-hosted, read-only tracker for Solid's soFUSE and soEURC positions and yield.",
   "private": true,
   "engines": {
     "node": ">=22"

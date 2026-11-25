@@ -5,14 +5,14 @@ pushd "%~dp0" || goto folder_error
 node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" >nul 2>&1
 if errorlevel 1 goto node_error
 
-echo Press Ctrl+C to stop the tracker.
+echo Press Ctrl+C to stop Solid Tracker.
 echo.
 node server.mjs
 set "RESULT=%ERRORLEVEL%"
 popd
 if "%RESULT%"=="0" exit /b 0
 echo.
-echo The tracker stopped with an error. See the message above.
+echo Solid Tracker stopped with an error. See the message above.
 pause
 exit /b %RESULT%
 

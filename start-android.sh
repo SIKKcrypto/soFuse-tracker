@@ -12,5 +12,5 @@ fi
 export HOST=127.0.0.1
 export HISTORY_CACHE_FILE="${HISTORY_CACHE_FILE:-$HOME/.cache/sofuse-tracker/sofuse-history.json}"
 
-printf '%s\n' 'Keep this Termux session running. Press Ctrl+C to stop the tracker.'
+printf '%s\n' 'Keep this Termux session running. Press Ctrl+C to stop Solid Tracker.'
 exec node server.mjs

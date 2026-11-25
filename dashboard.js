@@ -2,20 +2,44 @@ const form = document.getElementById('lookup');
 const input = document.getElementById('address');
 const button = document.getElementById('submit');
 const status = document.getElementById('status');
-const position = document.getElementById('position');
 const coverage = document.getElementById('coverage');
+const assetControls = document.getElementById('asset-controls');
+const assetButtons = assetControls.querySelectorAll('button');
+const rateHistorySection = document.getElementById('rate-history');
 const addressPattern = /^0x[0-9a-f]{40}$/i;
 const zeroAddress = '0x' + '0'.repeat(40);
 const integerFormat = new Intl.NumberFormat('en');
 const dateFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
 const lookupError = 'The wallet lookup is temporarily unavailable. Try again in a moment.';
+const assetViews = {
+  sofuse: {
+    position: document.getElementById('position'),
+    endpoint: '/api/position',
+    network: 'Fuse Network',
+    addressLabel: 'Fuse wallet address',
+    summary: document.getElementById('page-summary').textContent,
+    empty: 'This wallet currently holds no liquid or locked soFUSE.',
+    show: showFuse,
+  },
+  soeurc: {
+    position: document.getElementById('soeurc-position'),
+    endpoint: '/api/soeurc-position',
+    network: 'Base',
+    addressLabel: 'Base wallet address',
+    summary: 'Look up the current EURC value of your soEUR balance on Base.',
+    empty: 'This wallet currently holds no soEUR on Base.',
+    show: showSoEURC,
+  },
+};
+let activeAsset = 'sofuse';
 let activeRequest;
-let shownAddress;
+let euroEarningsRequest;
+let submittedAddress;
 
-function format(raw, digits = 2, signed = false) {
+function format(raw, digits = 2, signed = false, decimals = 18) {
   const value = BigInt(raw);
   const magnitude = value < 0n ? -value : value;
-  const divisor = 10n ** BigInt(18 - digits);
+  const divisor = 10n ** BigInt(decimals - digits);
   const scale = 10n ** BigInt(digits);
   const rounded = (magnitude + divisor / 2n) / divisor;
   const fraction = (rounded % scale).toString().padStart(digits, '0');
@@ -28,7 +52,7 @@ function setStatus(message, kind = '') {
   status.textContent = message;
 }
 
-function show(data, address) {
+function showFuse(data, address) {
   const fields = {
     'shown-address': address,
     value: format(data.value),
@@ -60,7 +84,69 @@ function show(data, address) {
   coverage.textContent = notes.join(' ');
   coverage.hidden = !notes.length;
   showLocks(data);
-  position.hidden = false;
+}
+
+function showSoEURC(data, address) {
+  const fields = {
+    'soeurc-shown-address': address,
+    'soeurc-value': format(data.value, 2, false, 6),
+    'soeurc-balance': format(data.balance, 6, false, 6),
+    'soeurc-rate': format(data.rate, 6, false, 6),
+    'soeurc-block': 'Base block ' + integerFormat.format(data.block),
+  };
+  for (const [id, text] of Object.entries(fields)) document.getElementById(id).textContent = text;
+  document.getElementById('soeurc-explorer').href = 'https://basescan.org/address/' + address;
+}
+
+async function loadEuroEarnings(address) {
+  const amount = document.getElementById('soeurc-earned');
+  const unit = document.getElementById('soeurc-earned-unit');
+  const progress = document.getElementById('soeurc-earned-status');
+  const request = new AbortController();
+  euroEarningsRequest = request;
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(5 * 60 * 1000)]);
+  const url = '/api/soeurc-earnings?' + new URLSearchParams({ address });
+  amount.textContent = '—';
+  amount.dataset.tone = '';
+  unit.hidden = true;
+  progress.textContent = 'Loading Base earnings history…';
+  try {
+    while (!signal.aborted) {
+      const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(45000)]) });
+      if (!response.ok) throw new Error('Base earnings history unavailable');
+      const data = await response.json();
+      signal.throwIfAborted();
+      if (response.status !== 202) {
+        if (typeof data.earned !== 'string' || !/^-?\d+$/.test(data.earned) ||
+            !Number.isSafeInteger(data.block) || data.block <= 0) throw new Error('Invalid Base earnings history');
+        const earnings = BigInt(data.earned);
+        amount.textContent = format(earnings, 2, false, 6);
+        amount.dataset.tone = earnings < 0n ? 'negative' : earnings > 0n ? 'positive' : '';
+        unit.hidden = false;
+        progress.textContent = 'Finalized through Base block ' + integerFormat.format(data.block) + '.';
+        return;
+      }
+      const message = Number.isSafeInteger(data.through) && Number.isSafeInteger(data.target)
+        ? 'Syncing Base history through block ' + integerFormat.format(data.through) + ' of ' + integerFormat.format(data.target) + '…'
+        : 'Syncing Base earnings history…';
+      if (progress.textContent !== message) progress.textContent = message;
+      const retry = Number(response.headers.get('Retry-After')) || 2;
+      await new Promise(resolve => {
+        const timer = setTimeout(done, Math.min(30, Math.max(1, retry)) * 1000);
+        function done() {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', done);
+          resolve();
+        }
+        signal.addEventListener('abort', done, { once: true });
+      });
+    }
+    signal.throwIfAborted();
+  } catch {
+    if (!request.signal.aborted) progress.textContent = 'Base earnings history is temporarily unavailable.';
+  } finally {
+    if (euroEarningsRequest === request) euroEarningsRequest = undefined;
+  }
 }
 
 function showLocks(data) {
@@ -92,38 +178,41 @@ function showLocks(data) {
 }
 
 async function lookup(address) {
-  activeRequest?.abort();
-  const refreshing = !position.hidden && shownAddress === address.toLowerCase();
+  cancelLookup();
+  const asset = activeAsset;
+  const view = assetViews[asset];
+  const { position } = view;
+  const refreshing = !position.hidden && view.shownAddress === address.toLowerCase();
   if (!addressPattern.test(address) || address.toLowerCase() === zeroAddress) {
-    activeRequest = undefined;
     input.setAttribute('aria-invalid', 'true');
     input.focus();
-    setStatus('Enter a Fuse wallet address beginning with 0x and followed by 40 hexadecimal characters.', 'error');
-    position.removeAttribute('aria-busy');
+    setStatus(`Enter a ${view.addressLabel} beginning with 0x and followed by 40 hexadecimal characters.`, 'error');
     updateButton();
-    button.disabled = false;
     return;
   }
   input.removeAttribute('aria-invalid');
   const request = new AbortController();
   activeRequest = request;
+  submittedAddress = address.toLowerCase();
   position.hidden = !refreshing;
   position.setAttribute('aria-busy', 'true');
   setStatus(refreshing ? 'Refreshing wallet position…' : 'Looking up wallet position…', 'loading');
   button.disabled = true;
   try {
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(45000)]);
-    const response = await fetch('/api/position?' + new URLSearchParams({ address }), { signal });
+    const response = await fetch(view.endpoint + '?' + new URLSearchParams({ address }), { signal });
     if (!response.ok) {
       const data = await response.json().catch(() => null);
       throw new Error(typeof data?.error === 'string' ? data.error : lookupError);
     }
     const data = await response.json();
     if (request.signal.aborted) return;
-    show(data, address);
-    shownAddress = address.toLowerCase();
-    if (BigInt(data.balance) === 0n && data.locks?.length === 0) {
-      setStatus('This wallet currently holds no liquid or locked soFUSE.');
+    view.show(data, address);
+    view.shownAddress = address.toLowerCase();
+    position.hidden = false;
+    if (asset === 'soeurc') loadEuroEarnings(address);
+    if (BigInt(data.balance) === 0n && (asset === 'soeurc' || data.locks?.length === 0)) {
+      setStatus(view.empty);
     } else {
       setStatus('Wallet position loaded.', 'success');
     }
@@ -147,18 +236,27 @@ async function lookup(address) {
 }
 
 function updateButton() {
+  const { position, shownAddress } = assetViews[activeAsset];
   button.textContent = !position.hidden && shownAddress === input.value.trim().toLowerCase()
     ? 'Refresh' : 'Look up';
 }
 
+function cancelLookup() {
+  if (euroEarningsRequest) {
+    euroEarningsRequest.abort();
+    euroEarningsRequest = undefined;
+    document.getElementById('soeurc-earned-status').textContent = 'Look up the wallet to load earnings.';
+  }
+  if (!activeRequest) return;
+  activeRequest.abort();
+  activeRequest = undefined;
+  assetViews[activeAsset].position.removeAttribute('aria-busy');
+  button.disabled = false;
+}
+
 input.addEventListener('input', () => {
   input.removeAttribute('aria-invalid');
-  if (activeRequest) {
-    activeRequest.abort();
-    activeRequest = undefined;
-    position.removeAttribute('aria-busy');
-    button.disabled = false;
-  }
+  cancelLookup();
   setStatus('');
   updateButton();
 });
@@ -167,12 +265,6 @@ form.addEventListener('submit', event => {
   event.preventDefault();
   lookup(input.value.trim());
 });
-
-const initial = new URLSearchParams(location.search).get('address');
-if (initial) {
-  input.value = initial;
-  lookup(initial.trim());
-}
 
 const rateHistoryStatus = document.getElementById('rate-history-status');
 const rateHistoryContent = document.getElementById('rate-history-content');
@@ -194,6 +286,7 @@ const periodPercent = new Intl.NumberFormat('en', {
 });
 let rateHistory;
 let fullRateHistory;
+let rateHistoryRequest;
 
 function selectRateUpdate(index) {
   const point = rateHistory.points[index];
@@ -360,10 +453,15 @@ function showRateHistory() {
 }
 
 async function loadRateHistory() {
+  const request = new AbortController();
+  rateHistoryRequest = request;
+  rateHistoryStatus.textContent = 'Loading rate history…';
   try {
-    const response = await fetch('/api/rate-history', { signal: AbortSignal.timeout(25000) });
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(25000)]);
+    const response = await fetch('/api/rate-history', { signal });
     if (!response.ok) throw new Error('Rate history request failed');
     const data = await response.json();
+    if (request.signal.aborted) return;
     const updates = data.points.map(({ timestamp, rate }) => {
       if (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > 8640000000000 ||
           typeof rate !== 'string' || !/^[0-9]{1,78}$/.test(rate) || BigInt(rate) <= 0n) {
@@ -378,8 +476,44 @@ async function loadRateHistory() {
     fullRateHistory = { updates, stale: data.stale };
     showRateHistory();
   } catch {
-    rateHistoryStatus.textContent = 'Vault rate history is temporarily unavailable.';
+    if (!request.signal.aborted) rateHistoryStatus.textContent = 'Vault rate history is temporarily unavailable.';
+  } finally {
+    if (rateHistoryRequest === request) rateHistoryRequest = undefined;
   }
+}
+
+function selectAsset(asset) {
+  cancelLookup();
+  assetViews[activeAsset].position.hidden = true;
+  activeAsset = asset;
+  const view = assetViews[asset];
+  document.getElementById('network').textContent = view.network;
+  document.getElementById('page-summary').textContent = view.summary;
+  document.getElementById('address-label').textContent = view.addressLabel;
+  input.removeAttribute('aria-invalid');
+  setStatus('');
+  for (const assetButton of assetButtons) {
+    assetButton.setAttribute('aria-pressed', String(assetButton.dataset.asset === asset));
+  }
+
+  const url = new URL(location.href);
+  if (asset === 'soeurc') url.searchParams.set('asset', asset);
+  else url.searchParams.delete('asset');
+  history.replaceState(null, '', url);
+  rateHistorySection.hidden = asset !== 'sofuse';
+  if (rateHistorySection.hidden) {
+    rateHistoryRequest?.abort();
+    rateHistoryRequest = undefined;
+  } else if (!fullRateHistory && !rateHistoryRequest) {
+    loadRateHistory();
+  }
+
+  const address = input.value.trim();
+  if (submittedAddress === address.toLowerCase()) {
+    view.position.hidden = view.shownAddress !== submittedAddress;
+    lookup(address);
+  }
+  updateButton();
 }
 
 rateHistoryCursor.addEventListener('input', () => selectRateUpdate(Number(rateHistoryCursor.value)));
@@ -389,4 +523,17 @@ rateHistoryPlot.addEventListener('pointermove', event => {
   if (event.pointerType === 'mouse') inspectRateAtPointer(event);
 });
 new ResizeObserver(drawRateHistory).observe(rateHistoryPlot);
-loadRateHistory();
+
+for (const assetButton of assetButtons) {
+  assetButton.addEventListener('click', () => {
+    if (activeAsset !== assetButton.dataset.asset) selectAsset(assetButton.dataset.asset);
+  });
+}
+const initial = new URLSearchParams(location.search);
+selectAsset(initial.get('asset') === 'soeurc' ? 'soeurc' : 'sofuse');
+assetControls.hidden = false;
+const initialAddress = initial.get('address');
+if (initialAddress) {
+  input.value = initialAddress;
+  lookup(initialAddress.trim());
+}

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Track liquid and locked soFUSE by Fuse wallet address.">
+  <meta name="description" content="Track Solid's soFUSE and soEURC positions and yield by wallet address.">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#0b1512">
-  <title>soFUSE Tracker</title>
+  <title>Solid Tracker</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/icon-192.png">
@@ -17,13 +17,18 @@
 <body>
   <main class="shell">
     <header class="page-heading">
-      <p class="network"><span aria-hidden="true"></span> Fuse Network</p>
-      <h1>soFUSE Tracker</h1>
-      <p>Track your liquid balance, tier locks, and net gain by wallet address.</p>
+      <p class="network" id="network">Fuse Network</p>
+      <h1>Solid Tracker</h1>
+      <p id="page-summary">Track your liquid balance, tier locks, and net gain by wallet address.</p>
     </header>
 
+    <div id="asset-controls" class="asset-controls" role="group" aria-label="Tracked asset" hidden>
+      <button type="button" data-asset="sofuse" aria-pressed="true">soFUSE</button>
+      <button type="button" data-asset="soeurc" aria-pressed="false">soEURC</button>
+    </div>
+
     <form id="lookup" class="lookup">
-      <label for="address">Fuse wallet address</label>
+      <label id="address-label" for="address">Fuse wallet address</label>
       <div class="input-row">
         <input id="address" name="address" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-errormessage="status" required>
         <button id="submit" type="submit">Look up</button>
@@ -32,7 +37,7 @@
     </form>
     <noscript><p class="notice">Enable JavaScript to look up a wallet.</p></noscript>
 
-    <section id="position" aria-labelledby="position-heading" hidden>
+    <section id="position" class="wallet-position" aria-labelledby="position-heading" hidden>
       <header class="result-heading">
         <div>
           <h2 id="position-heading">Wallet position</h2>
@@ -83,7 +88,37 @@
       </footer>
     </section>
 
-    <section class="card rate-history" aria-labelledby="rate-history-heading">
+    <section id="soeurc-position" class="wallet-position" aria-labelledby="soeurc-position-heading" hidden>
+      <header class="result-heading">
+        <div>
+          <h2 id="soeurc-position-heading">Wallet position</h2>
+          <code id="soeurc-shown-address" class="wallet-address"></code>
+        </div>
+        <a id="soeurc-explorer" target="_blank" rel="noopener noreferrer" href="https://basescan.org/">View on BaseScan</a>
+      </header>
+
+      <div class="summary euro-summary">
+        <article class="card metric metric-primary">
+          <h3>Position value</h3>
+          <p class="metric-value"><strong id="soeurc-value"></strong> <span>EURC</span></p>
+          <p class="metric-detail"><span id="soeurc-balance"></span> soEUR in wallet</p>
+        </article>
+        <article class="card metric">
+          <h3>Vault yield earned</h3>
+          <p class="metric-value"><strong id="soeurc-earned">—</strong> <span id="soeurc-earned-unit" hidden>EURC</span></p>
+          <p class="metric-detail">Rate changes on wallet-held soEUR, including before card spending. Excludes boosts and cashback.</p>
+          <p id="soeurc-earned-status" class="metric-detail" role="status"></p>
+        </article>
+        <article class="card metric">
+          <h3>Conversion rate</h3>
+          <p class="metric-value"><strong id="soeurc-rate"></strong> <span>EURC per soEUR</span></p>
+          <p class="metric-detail">Current vault rate</p>
+        </article>
+      </div>
+      <footer class="position-meta"><span id="soeurc-block"></span></footer>
+    </section>
+
+    <section id="rate-history" class="card rate-history" aria-labelledby="rate-history-heading">
       <header class="rate-history-heading">
         <div>
           <h2 id="rate-history-heading">soFUSE conversion rate</h2>
@@ -121,7 +156,7 @@
     </section>
   </main>
   <footer class="shell site-footer">
-    <p>Want to run this locally? <a href="https://github.com/SIKKcrypto/soFuse-tracker#before-you-start">Read the setup guide on GitHub</a>.</p>
+    <p>Want to run this locally? <a href="https://github.com/SIKKcrypto/solid-tracker#before-you-start">Read the setup guide on GitHub</a>.</p>
   </footer>
 </body>
 </html>

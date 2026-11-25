@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { serialize, walletHistory } from './history-cache.mjs';
 import { staticFiles } from './site-assets.mjs';
+import { createEuroHistory, euroAccountant, euroShares } from './base-yield-history.mjs';
 
 const explorer = 'https://explorer.fuse.io';
 const shares = '0xb33c8f0b0816fd147fcf896c594a3ef408845e2c';
@@ -12,6 +13,7 @@ const rateUpdatedTopic = '0xa95bc6aba40bbc4d95fc35f118c4cd8b53fc5d5b89ed264002af
 const tierLocker = '0x7c8e58c63a11ea74d3986d5cac1e820ef87c6584';
 const queue = '0x8a6612ff8ba43c4c8a1e7dd5c0ee2d7cbedf0e66';
 const boostSender = '0x521b8d0934b813737ffe19cbc7de810f02b5d9e1';
+const euroUnit = 10n ** 6n;
 const zero = '0x' + '0'.repeat(40);
 const unit = 10n ** 18n;
 const addressPattern = /^0x[0-9a-f]{40}$/i;
@@ -29,13 +31,13 @@ async function json(url, options) {
   return response.json();
 }
 
-async function rpc(method, params) {
-  const data = await json('https://rpc.fuse.io', {
+async function rpc(method, params, endpoint = 'https://rpc.fuse.io') {
+  const data = await json(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  if (!data.result || data.error) throw new Error('Fuse RPC: ' + (data.error?.message ?? 'no result'));
+  if (!data.result || data.error) throw new Error('RPC: ' + (data.error?.message ?? 'no result'));
   return data.result;
 }
 
@@ -154,6 +156,25 @@ async function portfolio(address, persist) {
   const netGain = history.historyAvailable && !history.historyStale && !history.unclassified && !history.pending
     ? value + BigInt(history.withdrawals) - BigInt(history.deposits) : null;
   return { ...current, ...summary, netGain };
+}
+
+function baseRpc(method, params, endpoint = process.env.BASE_RPC_URL || 'https://mainnet.base.org') {
+  return rpc(method, params, endpoint);
+}
+
+async function euroPosition(address, blockHex) {
+  blockHex ??= await baseRpc('eth_blockNumber', []);
+  const block = Number(blockHex);
+  if (!Number.isSafeInteger(block) || block <= 0) throw new Error('Invalid Base block number');
+  const addressWord = address.slice(2).padStart(64, '0');
+  const [balanceHex, rateHex] = await Promise.all([
+    baseRpc('eth_call', [{ to: euroShares, data: '0x70a08231' + addressWord }, blockHex]),
+    baseRpc('eth_call', [{ to: euroAccountant, data: '0x679aefce' }, blockHex]),
+  ]);
+  const balance = readUint(balanceHex);
+  const rate = readUint(rateHex);
+  if (rate === 0n) throw new Error('Base accountant returned a zero rate');
+  return { block, balance, rate, value: balance * rate / euroUnit };
 }
 
 async function loadRateHistory() {
@@ -304,7 +325,9 @@ function sendJson(response, status, body) {
 }
 
 export function createTrackerHandler({ hosted = false } = {}) {
-  const activeLookups = new Map();
+  const fuseLookups = new Map();
+  const euroLookups = new Map();
+  const euroHistory = createEuroHistory({ rpc: baseRpc, persist: !hosted });
   let rateSnapshot;
   let rateRequest;
   let nextRateRefresh = 0;
@@ -326,6 +349,7 @@ export function createTrackerHandler({ hosted = false } = {}) {
   }
 
   return async (request, response) => {
+    let network = 'Fuse';
     try {
       const url = new URL(request.url, 'http://localhost');
       const file = !hosted && Object.hasOwn(staticFiles, url.pathname) && staticFiles[url.pathname];
@@ -340,18 +364,33 @@ export function createTrackerHandler({ hosted = false } = {}) {
         }
         return sendJson(response, 200, history);
       }
-      if (url.pathname === '/api/position') {
+      const isEarnings = url.pathname === '/api/soeurc-earnings';
+      const isEuro = isEarnings || url.pathname === '/api/soeurc-position';
+      if (isEuro || url.pathname === '/api/position') {
+        if (isEuro) network = 'Base';
         const address = (url.searchParams.get('address')?.trim() ?? '').toLowerCase();
         if (!addressPattern.test(address) || address === zero) {
-          return sendJson(response, 400, { error: 'Enter a valid Fuse wallet address.' });
+          return sendJson(response, 400, { error: 'Enter a valid ' + network + ' wallet address.' });
         }
+        if (isEarnings) {
+          const endpoint = process.env.BASE_HISTORY_RPC_URL || (!hosted && 'https://base-rpc.publicnode.com');
+          if (!endpoint) return sendJson(response, 503, { error: 'Base yield history is not configured on this server.' });
+          const result = await euroHistory(address, euroPosition, endpoint);
+          if ('through' in result) {
+            response.setHeader('Retry-After', '2');
+            return sendJson(response, 202, result);
+          }
+          return sendJson(response, 200, result);
+        }
+        const activeLookups = isEuro ? euroLookups : fuseLookups;
         let lookup = activeLookups.get(address);
         if (!lookup) {
           if (activeLookups.size >= 8) {
             response.setHeader('Retry-After', '5');
             return sendJson(response, 503, { error: 'The tracker is busy. Try again in a few seconds.' });
           }
-          lookup = portfolio(address, !hosted).finally(() => activeLookups.delete(address));
+          lookup = (isEuro ? euroPosition(address) : portfolio(address, !hosted))
+            .finally(() => activeLookups.delete(address));
           activeLookups.set(address, lookup);
         }
         return sendJson(response, 200, await lookup);
@@ -362,8 +401,8 @@ export function createTrackerHandler({ hosted = false } = {}) {
       }
       sendJson(response, 404, { error: 'Page not found.' });
     } catch (error) {
-      console.error(error.message);
-      sendJson(response, 502, { error: 'Fuse data is temporarily unavailable. Try again shortly.' });
+      console.error(network + ' data:', error.message);
+      sendJson(response, 502, { error: network + ' data is temporarily unavailable. Try again shortly.' });
     }
   };
 }

@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "soFUSE Tracker",
-  "short_name": "soFUSE",
-  "description": "Track your liquid and locked soFUSE on Fuse Network.",
+  "name": "Solid Tracker",
+  "short_name": "Solid Tracker",
+  "description": "Track Solid's soFUSE and soEURC positions and yield by wallet address.",
   "lang": "en",
   "start_url": "/",
   "scope": "/",

@@ -210,3 +210,116 @@ test('serves chronological vault rate events and shares the cached scan between 
   assert.match(hosted.headers['Vercel-CDN-Cache-Control'], /s-maxage=300/);
   assert.equal((await dispatch(hostedRates, '/api/rate-history?refresh=true')).headers['Vercel-CDN-Cache-Control'], undefined);
 });
+
+test('values soEUR shares in six-decimal EURC at the same Base block', async t => {
+  const originalEndpoint = process.env.BASE_RPC_URL;
+  const endpoint = 'https://base-rpc.example';
+  process.env.BASE_RPC_URL = endpoint;
+  t.after(() => {
+    if (originalEndpoint === undefined) delete process.env.BASE_RPC_URL;
+    else process.env.BASE_RPC_URL = originalEndpoint;
+  });
+  const { createTrackerServer } = await import('./server.mjs');
+  const server = createTrackerServer();
+  const path = '/api/soeurc-position?address=' + owner;
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, endpoint);
+    calls++;
+    const { method, params } = JSON.parse(options.body);
+    if (method === 'eth_blockNumber') return Response.json({ result: '0x357b665' });
+    assert.equal(method, 'eth_call');
+    const [call, block] = params;
+    assert.equal(block, '0x357b665');
+    if (call.to === '0x4f4b212af8b5020399dde325e1bc5b33b53db70b') {
+      assert.equal(call.data, '0x70a08231' + topic(owner).slice(2));
+      return Response.json({ result: hash(6522674) });
+    }
+    assert.deepEqual(call, { to: '0xdcf7a01e32bff2a15b5b42197f75fba7e1f8be35', data: '0x679aefce' });
+    return Response.json({ result: hash(1005000) });
+  });
+
+  const [first, concurrent] = await Promise.all([dispatch(server, path), dispatch(server, path)]);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(JSON.parse(first.body), {
+    block: 0x357b665,
+    balance: '6522674',
+    rate: '1005000',
+    value: '6555287',
+  });
+  assert.equal(concurrent.body, first.body);
+  assert.equal(calls, 3);
+  assert.equal((await dispatch(server, '/api/soeurc-position?address=invalid')).status, 400);
+
+  const { default: hostedEuroPosition } = await import('./api/soeurc-position.mjs');
+  const hosted = await dispatch(hostedEuroPosition, path);
+  assert.equal(hosted.status, 200);
+  assert.equal(hosted.body, first.body);
+  assert.equal(hosted.headers['Cache-Control'], 'no-store');
+  assert.equal(hosted.headers['Vercel-CDN-Cache-Control'], undefined);
+});
+
+test('resumes a shared Base scan and reports earned yield after all shares leave the wallet', async t => {
+  const prior = process.env.BASE_HISTORY_RPC_URL;
+  const archive = 'https://base-archive.example';
+  process.env.BASE_HISTORY_RPC_URL = archive;
+  t.after(() => {
+    if (prior === undefined) delete process.env.BASE_HISTORY_RPC_URL;
+    else process.env.BASE_HISTORY_RPC_URL = prior;
+  });
+  const firstBlock = 52636355;
+  const finalized = firstBlock + 500000;
+  const euroShares = '0x4f4b212af8b5020399dde325e1bc5b33b53db70b';
+  const euroAccountant = '0xdcf7a01e32bff2a15b5b42197f75fba7e1f8be35';
+  const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  const rateTopic = '0xa95bc6aba40bbc4d95fc35f118c4cd8b53fc5d5b89ed264002af03503a7a9439';
+  const blockHex = block => '0x' + block.toString(16);
+  const log = (offset, address, topics, data) => ({
+    address, topics, data, blockNumber: blockHex(firstBlock + offset), logIndex: '0x0',
+  });
+  const records = [
+    log(1, euroShares, [transferTopic, topic(zero), topic(owner)], hash(100000000)),
+    log(2, euroAccountant, [rateTopic], '0x' + [1000000, 1010000, 0].map(word).join('')),
+    log(3, euroShares, [transferTopic, topic(owner), topic(solver)], hash(100000000)),
+    log(4, euroAccountant, [rateTopic], '0x' + [1010000, 1020000, 0].map(word).join('')),
+  ];
+  const scanned = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const { method, params } = JSON.parse(options.body);
+    if (method === 'eth_getBlockByNumber') {
+      assert.deepEqual(params, ['finalized', false]);
+      return Response.json({ result: { number: blockHex(finalized) } });
+    }
+    if (method === 'eth_getLogs') {
+      assert.equal(url, archive);
+      const { address, fromBlock, toBlock, topics } = params[0];
+      assert.deepEqual(address, [euroShares, euroAccountant]);
+      assert.deepEqual(topics, [[transferTopic, rateTopic]]);
+      const from = Number(fromBlock);
+      const to = Number(toBlock);
+      scanned.push([from, to]);
+      return Response.json({ result: records.filter(item => from <= Number(item.blockNumber) && Number(item.blockNumber) <= to) });
+    }
+    assert.equal(method, 'eth_call');
+    assert.equal(params[1], blockHex(finalized));
+    return Response.json({ result: hash(params[0].to === euroShares ? 0 : 1020000) });
+  });
+  const { default: hostedEarnings } = await import('./api/soeurc-earnings.mjs');
+  const path = '/api/soeurc-earnings?address=' + owner;
+  const progress = await Promise.all([dispatch(hostedEarnings, path), dispatch(hostedEarnings, path)]);
+  assert.equal(progress[0].status, 202);
+  assert.equal(progress[0].headers['Retry-After'], '2');
+  assert.equal(progress[1].body, progress[0].body);
+  assert.deepEqual(JSON.parse(progress[0].body), { through: firstBlock + 449999, target: finalized });
+  assert.equal(scanned.length, 9);
+
+  const result = await dispatch(hostedEarnings, path);
+  assert.equal(result.status, 200);
+  assert.equal(result.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(JSON.parse(result.body), { earned: '1000000', block: finalized });
+  assert.equal(scanned.length, 11);
+  assert.deepEqual(scanned.at(-1), [finalized, finalized]);
+  await dispatch(hostedEarnings, path);
+  assert.equal(scanned.length, 11, 'verified history is shared across lookups');
+});
