@@ -218,12 +218,77 @@ dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   font-size: .8rem;
 }
 
+.rate-history { margin-top: clamp(1.65rem, 4vw, 2.75rem); }
+.rate-history-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .65rem; }
+.rate-history-heading h2 { font-size: 1.2rem; letter-spacing: -.02em; }
+.rate-history-heading p, .rate-history-status { color: var(--muted); font-size: .875rem; }
+#rate-history-period-control { display: flex; align-items: center; gap: .5rem; }
+#rate-history-period-control label { margin-bottom: 0; font-size: .8rem; color: var(--muted); }
+#rate-history-period {
+  min-height: 2.3rem;
+  padding: .25rem .5rem;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  background: var(--input);
+  color: inherit;
+  font: inherit;
+  font-size: .8rem;
+}
+.rate-history-status { margin-top: .75rem; }
+.rate-history-status:empty { display: none; }
+.rate-history-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .65rem 1rem;
+  margin: 1rem 0 .85rem;
+}
+.rate-history-metrics > div {
+  min-width: 0;
+  padding: .65rem .75rem;
+  border: 1px solid var(--border);
+  border-radius: .55rem;
+  background: var(--input);
+}
+.rate-history-metrics dt { font-size: .75rem; }
+.rate-history-metrics dd { margin-top: .2rem; text-align: left; font-weight: 650; }
+#rate-history-latest, #rate-history-change[data-tone="positive"] { color: var(--accent); }
+#rate-history-change[data-tone="negative"] { color: var(--error); }
+#rate-history-plot { display: block; width: 100%; height: 15rem; }
+.rate-history-inspector { margin-top: .65rem; }
+.rate-history-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .2rem .75rem;
+}
+.rate-history-selection label { margin-bottom: 0; font-size: .8rem; }
+#rate-history-reading { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+#rate-history-cursor {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.site-footer {
+  padding: 0 0 2rem;
+  color: var(--muted);
+  font-size: .875rem;
+  text-align: center;
+}
+
 a { color: var(--accent); text-underline-offset: .2em; }
 a:hover { color: #dbfce8; }
 
 @media (max-width: 42rem) {
   .summary, .details { grid-template-columns: minmax(0, 1fr); }
   .position-meta { justify-content: start; }
+  .rate-history-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #rate-history-plot { height: 12rem; }
 }
 
 @media (max-width: 24rem) {

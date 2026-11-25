@@ -2,11 +2,13 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { serialize, walletHistory } from './history-cache.mjs';
+import { staticFiles } from './site-assets.mjs';
 
 const explorer = 'https://explorer.fuse.io';
 const shares = '0xb33c8f0b0816fd147fcf896c594a3ef408845e2c';
 const wrapped = '0x0be9e53fd7edac9f859882afdda116645287c629';
 const accountant = '0xb29b5f760d38587f7f4c896c458b9eeb5cad9c0c';
+const rateUpdatedTopic = '0xa95bc6aba40bbc4d95fc35f118c4cd8b53fc5d5b89ed264002af03503a7a9439';
 const tierLocker = '0x7c8e58c63a11ea74d3986d5cac1e820ef87c6584';
 const queue = '0x8a6612ff8ba43c4c8a1e7dd5c0ee2d7cbedf0e66';
 const boostSender = '0x521b8d0934b813737ffe19cbc7de810f02b5d9e1';
@@ -129,7 +131,7 @@ function readUint(value) {
   return BigInt(value);
 }
 
-async function portfolio(address) {
+async function portfolio(address, persist) {
   const block = await rpc('eth_blockNumber', []);
   const addressWord = address.slice(2).padStart(64, '0');
   const [balanceHex, rateHex, locks] = await Promise.all([
@@ -147,11 +149,43 @@ async function portfolio(address) {
   const lockedShares = locks?.reduce((total, lock) => total + lock.shares, 0n);
   const lockedValue = lockedShares == null ? null : lockedShares * rate / unit;
   const current = { block: Number(block), balance, rate, value, locks, lockedShares, lockedValue };
-  const history = await walletHistory(address, Number(block), balance, () => cashFlows(address, Number(block)));
+  const history = await walletHistory(address, Number(block), balance, () => cashFlows(address, Number(block)), { persist });
   const { shareDelta, ...summary } = history;
   const netGain = history.historyAvailable && !history.historyStale && !history.unclassified && !history.pending
     ? value + BigInt(history.withdrawals) - BigInt(history.deposits) : null;
   return { ...current, ...summary, netGain };
+}
+
+async function loadRateHistory() {
+  const block = Number(await rpc('eth_blockNumber', []));
+  if (!Number.isSafeInteger(block) || block <= 0) throw new Error('Invalid Fuse block number');
+  const signal = AbortSignal.timeout(20000);
+  const points = [];
+  let cursor;
+  for (let page = 0; page < 40; page++) {
+    const query = new URLSearchParams(cursor);
+    query.set('topic', rateUpdatedTopic);
+    const data = await json(explorer + '/api/v2/addresses/' + accountant + '/logs?' + query, { signal });
+    if (!Array.isArray(data.items)) throw new Error('Fuse rate history unavailable');
+    for (const item of data.items) {
+      if (item.topics?.[0] !== rateUpdatedTopic) continue;
+      if (!Number.isSafeInteger(item.block_number) || !/^0x[0-9a-f]{192}$/i.test(item.data)) {
+        throw new Error('Invalid vault rate event');
+      }
+      if (item.block_number > block) continue;
+      // ExchangeRateUpdated(uint96 oldRate, uint96 newRate, uint64 currentTime).
+      const rate = readUint('0x' + item.data.slice(66, 130));
+      const timestamp = Number(readUint('0x' + item.data.slice(130, 194)));
+      if (rate === 0n || rate >= 2n ** 96n || !Number.isSafeInteger(timestamp) ||
+          timestamp <= 0 || timestamp > 8640000000000) {
+        throw new Error('Invalid vault rate or timestamp');
+      }
+      points.push({ timestamp, rate });
+    }
+    cursor = data.next_page_params;
+    if (!cursor) return { block, points: points.reverse() };
+  }
+  throw new Error('Fuse rate history exceeded lookup limit');
 }
 
 async function readLocks(addressWord, block) {
@@ -254,17 +288,6 @@ async function cashFlows(address, block) {
   return { deposits, withdrawals, boosts, shareDelta, unclassified, pending: requests.size };
 }
 
-const staticFiles = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/dashboard.js': ['dashboard.js', 'text/javascript; charset=utf-8'],
-  '/pwa.js': ['pwa.js', 'text/javascript; charset=utf-8'],
-  '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'],
-  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
-  '/icon-192.png': ['icon-192.png', 'image/png'],
-  '/icon-512.png': ['icon-512.png', 'image/png'],
-};
-
 function send(response, status, type, body) {
   response.writeHead(status, {
     'Content-Type': type,
@@ -280,15 +303,42 @@ function sendJson(response, status, body) {
   send(response, status, 'application/json', serialize(body));
 }
 
-export function createTrackerServer() {
+export function createTrackerHandler({ hosted = false } = {}) {
   const activeLookups = new Map();
-  return createServer({ headersTimeout: 10000, requestTimeout: 15000 }, async (request, response) => {
+  let rateSnapshot;
+  let rateRequest;
+  let nextRateRefresh = 0;
+
+  async function rates() {
+    if (rateSnapshot && Date.now() < nextRateRefresh) return rateSnapshot;
+    rateRequest ??= loadRateHistory().then(history => {
+      nextRateRefresh = Date.now() + 5 * 60 * 1000;
+      rateSnapshot = history;
+      return history;
+    }).catch(error => {
+      if (!rateSnapshot) throw error;
+      console.error('Fuse rate history:', error.message);
+      nextRateRefresh = Date.now() + 30000;
+      rateSnapshot = { ...rateSnapshot, stale: true };
+      return rateSnapshot;
+    }).finally(() => { rateRequest = undefined; });
+    return rateRequest;
+  }
+
+  return async (request, response) => {
     try {
       const url = new URL(request.url, 'http://localhost');
-      const file = Object.hasOwn(staticFiles, url.pathname) && staticFiles[url.pathname];
+      const file = !hosted && Object.hasOwn(staticFiles, url.pathname) && staticFiles[url.pathname];
       if (request.method !== 'GET' && !(request.method === 'HEAD' && file)) {
         response.setHeader('Allow', file ? 'GET, HEAD' : 'GET');
         return sendJson(response, 405, { error: 'Method not allowed.' });
+      }
+      if (url.pathname === '/api/rate-history') {
+        const history = await rates();
+        if (hosted && !history.stale && !url.search) {
+          response.setHeader('Vercel-CDN-Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+        }
+        return sendJson(response, 200, history);
       }
       if (url.pathname === '/api/position') {
         const address = (url.searchParams.get('address')?.trim() ?? '').toLowerCase();
@@ -301,7 +351,7 @@ export function createTrackerServer() {
             response.setHeader('Retry-After', '5');
             return sendJson(response, 503, { error: 'The tracker is busy. Try again in a few seconds.' });
           }
-          lookup = portfolio(address).finally(() => activeLookups.delete(address));
+          lookup = portfolio(address, !hosted).finally(() => activeLookups.delete(address));
           activeLookups.set(address, lookup);
         }
         return sendJson(response, 200, await lookup);
@@ -315,7 +365,11 @@ export function createTrackerServer() {
       console.error(error.message);
       sendJson(response, 502, { error: 'Fuse data is temporarily unavailable. Try again shortly.' });
     }
-  });
+  };
+}
+
+export function createTrackerServer() {
+  return createServer({ headersTimeout: 10000, requestTimeout: 15000 }, createTrackerHandler());
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

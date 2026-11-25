@@ -30,15 +30,18 @@ function event(contract, topics, words) {
   return { address: { hash: contract }, topics, data: '0x' + words.map(word).join(''), decoded: null };
 }
 
-function dispatch(server, url, method = 'GET') {
+function dispatch(target, url, method = 'GET') {
   return new Promise(resolve => {
     const headers = {};
     let status;
-    server.emit('request', { url, method }, {
+    const request = { url, method };
+    const response = {
       setHeader: (name, value) => { headers[name] = value; },
       writeHead: (code, extra) => { status = code; Object.assign(headers, extra); },
       end: body => resolve({ status, headers, body }),
-    });
+    };
+    if (typeof target === 'function') target(request, response);
+    else target.emit('request', request, response);
   });
 }
 
@@ -121,6 +124,14 @@ test('reconciles raw deposit and withdrawal events, cancelled requests, and lock
   assert.equal((await dispatch(server, '/api/position?address=' + zero)).status, 400);
   assert.equal((await dispatch(server, '/api/position', 'POST')).status, 405);
   assert.equal((await dispatch(server, '/history-cache.mjs')).status, 404);
+
+  const { default: hostedPosition } = await import('./api/position.mjs');
+  const hosted = await dispatch(hostedPosition, path);
+  assert.equal(hosted.status, 200);
+  assert.equal(hosted.body, responses[0].body);
+  assert.equal(hosted.headers['Cache-Control'], 'no-store');
+  assert.equal(hosted.headers['Vercel-CDN-Cache-Control'], undefined);
+  assert.equal((await dispatch(hostedPosition, '/')).status, 404);
 });
 
 test('serves the installable app shell under the same-origin content policy', async () => {
@@ -146,4 +157,56 @@ test('serves the installable app shell under the same-origin content policy', as
   const worker = await dispatch(server, '/sw.js');
   assert.equal(worker.status, 200);
   assert.equal(worker.headers['Cache-Control'], 'no-cache');
+});
+
+test('serves chronological vault rate events and shares the cached scan between callers', async t => {
+  const { createTrackerServer } = await import('./server.mjs');
+  const server = createTrackerServer();
+  const accountant = '0xb29b5f760d38587f7f4c896c458b9eeb5cad9c0c';
+  const rateTopic = '0xa95bc6aba40bbc4d95fc35f118c4cd8b53fc5d5b89ed264002af03503a7a9439';
+  const update = (block, timestamp, oldRate, newRate) => ({
+    ...event(accountant, [rateTopic], [oldRate, newRate, timestamp]),
+    block_number: block,
+  });
+  let logRequests = 0;
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(input);
+    if (url.hostname === 'rpc.fuse.io') return Response.json({ result: '0x20' });
+    assert.equal(url.pathname, '/api/v2/addresses/' + accountant + '/logs');
+    assert.equal(url.searchParams.get('topic'), rateTopic);
+    logRequests++;
+    if (url.searchParams.get('block_number')) {
+      return Response.json({ items: [update(1, 1000, unit, unit * 108n / 100n)] });
+    }
+    return Response.json({
+      items: [
+        update(33, 3000, unit * 105n / 100n, unit * 110n / 100n),
+        update(5, 2000, unit * 108n / 100n, unit * 105n / 100n),
+      ],
+      next_page_params: { index: 0, block_number: 5 },
+    });
+  });
+  const [first, concurrent] = await Promise.all([
+    dispatch(server, '/api/rate-history'),
+    dispatch(server, '/api/rate-history'),
+  ]);
+  assert.equal(first.status, 200);
+  assert.deepEqual(JSON.parse(first.body), {
+    block: 32,
+    points: [
+      { timestamp: 1000, rate: String(unit * 108n / 100n) },
+      { timestamp: 2000, rate: String(unit * 105n / 100n) },
+    ],
+  });
+  assert.equal(concurrent.body, first.body);
+  assert.equal((await dispatch(server, '/api/rate-history')).body, first.body);
+  assert.equal(logRequests, 2);
+
+  const { default: hostedRates } = await import('./api/rate-history.mjs');
+  const hosted = await dispatch(hostedRates, '/api/rate-history');
+  assert.equal(hosted.status, 200);
+  assert.equal(hosted.body, first.body);
+  assert.equal(hosted.headers['Cache-Control'], 'no-store');
+  assert.match(hosted.headers['Vercel-CDN-Cache-Control'], /s-maxage=300/);
+  assert.equal((await dispatch(hostedRates, '/api/rate-history?refresh=true')).headers['Vercel-CDN-Cache-Control'], undefined);
 });

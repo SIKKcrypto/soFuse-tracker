@@ -82,6 +82,46 @@
         <span id="history-block" hidden></span>
       </footer>
     </section>
+
+    <section class="card rate-history" aria-labelledby="rate-history-heading">
+      <header class="rate-history-heading">
+        <div>
+          <h2 id="rate-history-heading">soFUSE conversion rate</h2>
+          <p id="rate-history-unit">FUSE per soFUSE · Vault rate updates</p>
+        </div>
+        <div id="rate-history-period-control" hidden>
+          <label for="rate-history-period">Period</label>
+          <select id="rate-history-period">
+            <option value="all">All history</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="6m">Last 6 months</option>
+            <option value="1y">Last year</option>
+            <option value="ytd">Year to date</option>
+          </select>
+        </div>
+      </header>
+      <p id="rate-history-status" class="rate-history-status" role="status">Loading rate history…</p>
+      <div id="rate-history-content" hidden>
+        <dl class="rate-history-metrics">
+          <div><dt>Latest</dt><dd id="rate-history-latest"></dd></div>
+          <div><dt>Low</dt><dd id="rate-history-low"></dd></div>
+          <div><dt>High</dt><dd id="rate-history-high"></dd></div>
+          <div><dt>Period change</dt><dd id="rate-history-change"></dd></div>
+        </dl>
+        <canvas id="rate-history-plot" aria-hidden="true"></canvas>
+        <div class="rate-history-inspector">
+          <div class="rate-history-selection">
+            <label id="rate-history-label" for="rate-history-cursor">Inspect rate updates</label>
+            <p id="rate-history-reading"></p>
+          </div>
+          <input type="range" id="rate-history-cursor" min="0" step="1" aria-describedby="rate-history-unit">
+        </div>
+      </div>
+    </section>
   </main>
+  <footer class="shell site-footer">
+    <p>Want to run this locally? <a href="https://github.com/SIKKcrypto/soFuse-tracker#before-you-start">Read the setup guide on GitHub</a>.</p>
+  </footer>
 </body>
 </html>

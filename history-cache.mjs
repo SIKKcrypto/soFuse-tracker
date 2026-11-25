@@ -12,6 +12,7 @@ const entries = new Map();
 const inFlight = new Map();
 const retryAfter = new Map();
 let writes = Promise.resolve();
+let restoring;
 
 export const serialize = value => JSON.stringify(value, (_, item) =>
   typeof item === 'bigint' ? item.toString() : item);
@@ -39,27 +40,29 @@ async function readCache() {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-try {
-  const data = await readCache();
-  if ([1, 2].includes(data?.version) && Array.isArray(data.entries)) {
-    const now = Date.now();
-    const keyPattern = data.version === 1 ? /^0x[0-9a-f]{40}$/i : /^[0-9a-f]{64}$/;
-    for (const pair of data.entries.slice(-maxEntries)) {
-      if (!Array.isArray(pair)) continue;
-      const [key, entry] = pair;
-      if (typeof key === 'string' && keyPattern.test(key) && validEntry(entry, now)) {
-        const { deposits, withdrawals, boosts, shareDelta, unclassified, pending } = entry.history;
-        entries.set(data.version === 1 ? fingerprint(key) : key, {
-          block: entry.block,
-          checkedAt: entry.checkedAt,
-          history: { deposits, withdrawals, boosts, shareDelta, unclassified, pending },
-        });
+async function restoreCache() {
+  try {
+    const data = await readCache();
+    if ([1, 2].includes(data?.version) && Array.isArray(data.entries)) {
+      const now = Date.now();
+      const keyPattern = data.version === 1 ? /^0x[0-9a-f]{40}$/i : /^[0-9a-f]{64}$/;
+      for (const pair of data.entries.slice(-maxEntries)) {
+        if (!Array.isArray(pair)) continue;
+        const [key, entry] = pair;
+        if (typeof key === 'string' && keyPattern.test(key) && validEntry(entry, now)) {
+          const { deposits, withdrawals, boosts, shareDelta, unclassified, pending } = entry.history;
+          entries.set(data.version === 1 ? fingerprint(key) : key, {
+            block: entry.block,
+            checkedAt: entry.checkedAt,
+            history: { deposits, withdrawals, boosts, shareDelta, unclassified, pending },
+          });
+        }
       }
+      if (data.version === 1 || entries.size !== data.entries.length) save();
     }
-    if (data.version === 1 || entries.size !== data.entries.length) save();
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('History cache could not be loaded:', error.message);
   }
-} catch (error) {
-  if (error.code !== 'ENOENT') console.error('History cache could not be loaded:', error.message);
 }
 
 function save() {
@@ -83,7 +86,8 @@ function save() {
   }).catch(error => console.error('History cache could not be saved:', error.message));
 }
 
-export async function walletHistory(address, block, balance, load) {
+export async function walletHistory(address, block, balance, load, { persist = true } = {}) {
+  if (persist) await (restoring ??= restoreCache());
   const key = fingerprint(address);
   const cached = entries.get(key);
   const now = Date.now();
@@ -104,7 +108,7 @@ export async function walletHistory(address, block, balance, load) {
         entries.delete(key);
         entries.set(key, { block, checkedAt: Date.now(), history });
         while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
-        save();
+        if (persist) save();
       }
       return { ...history, historyBlock: block, historyAvailable: true };
     })().finally(() => inFlight.delete(key));

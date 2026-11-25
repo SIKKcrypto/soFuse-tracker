@@ -117,6 +117,7 @@ For a Git clone, run `git pull --ff-only` from the project folder and start the 
 
 ## What the numbers mean
 
+- **Conversion rate history** charts published updates from the soFUSE vault. It shows how much FUSE one soFUSE represented at each update, independently of the wallet selected.
 - **Total position value** is the value of wallet-held shares plus shares still held in Solid's tier locker. Both use the vault conversion rate at the same Fuse block.
 - **Liquid net gain** is liquid position value plus verified withdrawal proceeds minus verified deposits. It includes shares received from the recognized Yield boost distributor. Tier-locked positions are outside this calculation.
 - **Unlock dates** come from the tier locker and are displayed in the browser's local time. Matured shares remain in the locked position until they leave the locker.
